@@ -2,6 +2,7 @@
 (() => {
   'use strict';
   const el = id => document.getElementById(id);
+  const core = () => window.WZWCore;
   let mode = 'word';
   const sourceHtmlTags = new Set(['P','DIV','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','UL','OL','LI','TABLE','THEAD','TBODY','TFOOT','TR','TD','TH','BR','STRONG','B','EM','I','U','S','A','SPAN','IMG','HR','SUP','SUB','PRE','CODE']);
   const isMarkedHeading = s => /^#{2,3}\s+/.test(s);
@@ -64,14 +65,15 @@
   }
   function richToHtml(options){
     const wrapper = document.createElement('div');
-    wrapper.innerHTML = sanitize(el('pasteWord').innerHTML,'inline');
+    wrapper.innerHTML = core().sanitize(el('pasteWord').innerHTML,'inline');
     // Word may paste <div> wrappers with nested <p>; do not discard text nodes or table cells.
     wrapper.querySelectorAll('*').forEach(node => {
       if(!sourceHtmlTags.has(node.tagName)) return;
       node.removeAttribute('class');node.removeAttribute('id');
-      node.removeAttribute('style');node.removeAttribute('width');node.removeAttribute('height');
+      // Keep safe Word font/colour/paragraph spacing/width instead of stripping every style.
+      node.removeAttribute('width');node.removeAttribute('height');
       if(!options.bold && /^(STRONG|B|EM|I|U)$/.test(node.tagName))node.replaceWith(...node.childNodes);
-      if(node.tagName === 'SPAN')node.replaceWith(...node.childNodes);
+      if(node.tagName === 'SPAN' && !node.hasAttribute('style'))node.replaceWith(...node.childNodes);
     });
     // Empty 'Word' editor can still include <br>, avoid producing a blank article.
     if(!wrapper.textContent.trim() && !wrapper.querySelector('img,table'))return '';
@@ -79,12 +81,12 @@
     if(options.first && !existingTitle){
       let first = [...wrapper.children].find(node => ['P','DIV'].includes(node.tagName) && node.textContent.trim());
       if(first && first.textContent.trim().length <= 100 && !first.querySelector('table,img,ul,ol')){
-        const newTitle=document.createElement('h2');newTitle.innerHTML=first.innerHTML;first.replaceWith(newTitle);
+        const newTitle=document.createElement('h2');newTitle.innerHTML=first.innerHTML;const originalStyle=first.getAttribute('style');if(originalStyle)newTitle.setAttribute('style',originalStyle);first.replaceWith(newTitle);
       }
     }
     if(options.chapter){wrapper.querySelectorAll('p').forEach(node=>{if(isChapter(node.textContent.trim()) && node.children.length===0){let h=document.createElement('h3');h.textContent=node.textContent;node.replaceWith(h);}});}
     if(!options.breaks){wrapper.querySelectorAll('p br').forEach(node=>node.replaceWith(document.createTextNode(' ')));}
-    return sanitize(wrapper.innerHTML,'inline');
+    return core().sanitize(wrapper.innerHTML,'inline');
   }
   function checkAccuracy(src,html,options){
     const body = document.createElement('div');body.innerHTML=html;
@@ -105,7 +107,8 @@
     return same;
   }
   function generate(){
-    if(state.busy){setPasteStatus('目前正有文件在轉換，請稍後再產生');return;}
+    if(!core()){setPasteStatus('轉換程式尚未載入，請重新整理頁面');return;}
+    if(core().isBusy()){setPasteStatus('目前正有文件在轉換，請稍後再產生');return;}
     const original=sourceStr();
     if(!original.trim()){setPasteStatus('請先貼上 Word 或純文字內容');return;}
     try{
@@ -113,12 +116,14 @@
       const raw=mode==='text'?parseText(original,o):richToHtml(o);
       if(!raw.trim()){setPasteStatus('沒有可轉換的文字');return;}
       // Generating a new article should not accidentally carry over unrelated image assets.
-      state.documentTitle='貼上文章';state.file=null;state.fileType='paste';state.imageLibrary.clear();
-      const styled=stylize(raw);
-      setContent(styled);
-      const same=checkAccuracy(original,state.html,o);
+      core().resetForPaste();
+      const keepOriginal=mode==='word'&&el('pasteKeepFormatting').checked;
+      const styled=keepOriginal?raw:core().stylize(raw);
+      core().setContent(styled);
+      const same=checkAccuracy(original,core().getHtml(),o);
       setPasteStatus(same?'已產生 HTML，文字核對通過':'已產生 HTML，但請先核對來源文字');
-      report('已完成貼上轉換；請核對原文後使用即時預覽與匯出功能。');
+      core().report('已完成貼上轉換；請核對原文後使用即時預覽與匯出功能。');
+      core().tab('preview');
     }catch(err){console.error(err);setPasteStatus('轉換失敗：'+err.message);}
   }
   function switchMode(next){
@@ -128,6 +133,7 @@
       button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));
     });
     el('pasteWordWrap').classList.toggle('hidden',next!=='word');
+    el('pasteKeepFormattingWrap').classList.toggle('hidden',next!=='word');
     el('pasteTextWrap').classList.toggle('hidden',next!=='text');
     el('pasteCompare').classList.add('hidden');
     setPasteStatus(next==='word'?'等待貼上 Word 內容':'等待貼上純文字');
@@ -141,7 +147,7 @@
     if(original){
       const doc=new DOMParser().parseFromString(original,'text/html');
       doc.querySelectorAll('style,script,meta,link,head,iframe,object,svg').forEach(x=>x.remove());
-      safe=sanitize(doc.body.innerHTML,'inline');
+      safe=core().sanitize(doc.body.innerHTML,'inline');
     }
     if(!safe.trim())safe=encode(plain).replace(/\r\n?/g,'\n').replace(/\n/g,'<br>');
     const selection=window.getSelection();
@@ -158,7 +164,7 @@
   }
   function start(){
     document.querySelectorAll('.paste-mode').forEach(x=>x.addEventListener('click',()=>switchMode(x.dataset.pasteMode)));
-    el('goPaste').addEventListener('click',()=>tab('paste'));
+    el('goPaste').addEventListener('click',()=>core().tab('paste'));
     el('pasteWord').addEventListener('paste',pasteSafeHtml);
     el('pasteWord').addEventListener('input',()=>setPasteStatus('已輸入 Word 內容，尚未產生 HTML'));
     el('pasteText').addEventListener('input',()=>setPasteStatus('已輸入純文字，尚未產生 HTML'));
@@ -166,7 +172,7 @@
     el('pasteClear').addEventListener('click',()=>{el('pasteWord').innerHTML='';el('pasteText').value='';el('pasteCompare').classList.add('hidden');setPasteStatus('已清空貼上欄位，已產出的 HTML 不受影響');});
     el('pasteDemo').addEventListener('click',()=>{switchMode('text');el('pasteText').value='2026 公司服務簡介\n\n我們提供網站建置、內容管理與後續維護服務。\n每一個段落都可以直接由網站後台修改。\n\n## 我們的特色\n• 網站規劃與設計\n• SEO 內容優化\n• 文章整理與上架\n\n## 常見問題\nQ：轉換後可以修改嗎？\nA：可以，文字、圖片與段落都能在編輯器內調整。';setPasteStatus('已載入示範文字，按「產生美化 HTML」查看結果');});
     // Add convenient jump to preview after generation.
-    const previewBtn=document.createElement('button');previewBtn.className='button';previewBtn.type='button';previewBtn.textContent='查看排版預覽 →';previewBtn.addEventListener('click',()=>tab('preview'));el('pasteGenerate').after(previewBtn);
+    const previewBtn=document.createElement('button');previewBtn.className='button';previewBtn.type='button';previewBtn.textContent='查看排版預覽 →';previewBtn.addEventListener('click',()=>core().tab('preview'));el('pasteGenerate').after(previewBtn);
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();
 })();
