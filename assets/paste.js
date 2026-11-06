@@ -115,6 +115,7 @@
       const o=opts();
       const raw=mode==='text'?parseText(original,o):richToHtml(o);
       if(!raw.trim()){setPasteStatus('沒有可轉換的文字');return;}
+      // 貼上預設重新排版，但不改寫原始文字；保留原稿格式為選填。
       // Generating a new article should not accidentally carry over unrelated image assets.
       core().resetForPaste();
       const keepOriginal=mode==='word'&&el('pasteKeepFormatting').checked;
@@ -124,6 +125,7 @@
       setPasteStatus(same?'已產生 HTML，文字核對通過':'已產生 HTML，但請先核對來源文字');
       core().report('已完成貼上轉換；請核對原文後使用即時預覽與匯出功能。');
       core().tab('preview');
+      document.getElementById('step-edit')?.scrollIntoView({behavior:'instant',block:'start'});
     }catch(err){console.error(err);setPasteStatus('轉換失敗：'+err.message);}
   }
   function switchMode(next){
